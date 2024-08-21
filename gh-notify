@@ -29,11 +29,13 @@ GH_NOTIFY_PER_PAGE_LIMIT=50
 
 # Customize the fzf keys using environment variables
 : "${GH_NOTIFY_MARK_ALL_READ_KEY:=ctrl-a}"
+: "${GH_NOTIFY_MARK_ALL_DONE_KEY:=ctrl-delete}"
 : "${GH_NOTIFY_OPEN_BROWSER_KEY:=ctrl-b}"
 : "${GH_NOTIFY_VIEW_DIFF_KEY:=ctrl-d}"
 : "${GH_NOTIFY_VIEW_PATCH_KEY:=ctrl-p}"
 : "${GH_NOTIFY_RELOAD_KEY:=ctrl-r}"
 : "${GH_NOTIFY_MARK_READ_KEY:=ctrl-t}"
+: "${GH_NOTIFY_MARK_DONE_KEY:=delete}"
 : "${GH_NOTIFY_COMMENT_KEY:=ctrl-x}"
 : "${GH_NOTIFY_TOGGLE_KEY:=ctrl-y}"
 : "${GH_NOTIFY_RESIZE_PREVIEW_KEY:=btab}"
@@ -66,6 +68,7 @@ set +o allexport
 # No need to export, since they aren't used in any child process.
 print_static_flag=false
 mark_read_flag=false
+mark_done_flag=false
 update_subscription_url=''
 
 # The minimum fzf version that the user needs to run all interactive commands.
@@ -157,11 +160,13 @@ ${WHITE_BOLD}Key Bindings fzf${NC}
   ${GREEN}${GH_NOTIFY_RESIZE_PREVIEW_KEY}${NC}       resize the preview window
   ${GREEN}shift+↑↓ ${NC}  scroll the preview up/ down
   ${GREEN}${GH_NOTIFY_MARK_ALL_READ_KEY}   ${NC}  mark all displayed notifications as read and reload
+  ${GREEN}${GH_NOTIFY_MARK_ALL_DONE_KEY}   ${NC}  mark all displayed notifications as done and reload
   ${GREEN}${GH_NOTIFY_OPEN_BROWSER_KEY}   ${NC}  browser
   ${GREEN}${GH_NOTIFY_VIEW_DIFF_KEY}   ${NC}  view diff
   ${GREEN}${GH_NOTIFY_VIEW_PATCH_KEY}   ${NC}  view diff in patch format
   ${GREEN}${GH_NOTIFY_RELOAD_KEY}   ${NC}  reload
   ${GREEN}${GH_NOTIFY_MARK_READ_KEY}   ${NC}  mark the selected notification as read and reload
+  ${GREEN}${GH_NOTIFY_MARK_DONE_KEY}   ${NC}  mark the selected notification as done and reload
   ${GREEN}${GH_NOTIFY_COMMENT_KEY}   ${NC}  write a comment with the editor and quit
   ${GREEN}${GH_NOTIFY_TOGGLE_KEY}   ${NC}  toggle the selected notification
   ${GREEN}esc      ${NC}  quit
@@ -350,6 +355,8 @@ process_url() {
         # https://blog.cuviper.com/2013/11/10/how-short-can-git-abbreviate/
         command basename "$url" | command head -c 12
     elif command grep -q "Release" <<<"$type"; then
+        echo "$url"
+        return
         if IFS=$'\t' read -r number prerelease < <(gh_rest_api "$url" \
             --cache=100h --jq '[.tag_name, .prerelease] | @tsv'); then
             if "$prerelease"; then
@@ -407,28 +414,28 @@ open_in_browser() {
     IFS=' ' read -r _ _ _ comment_number repo_full_name _ date time _ type number _ <<<"$1"
     unhashed_num=$(command tr -d "#" <<<"$number")
     case "$type" in
-        CheckSuite)
-            "$python_executable" -m webbrowser "https://github.com/${repo_full_name}/actions"
-            ;;
-        Commit)
-            command gh browse "$number" --repo "$repo_full_name"
-            ;;
-        Discussion)
-            "$python_executable" -m webbrowser "https://github.com/${repo_full_name}/discussions/${unhashed_num}"
-            ;;
-        Issue | PullRequest)
-            if [[ $comment_number == "$unhashed_num" || $comment_number == null ]]; then
-                command gh issue view "$number" --web --repo "$repo_full_name"
-            else
-                "$python_executable" -m webbrowser "https://github.com/${repo_full_name}/issues/${unhashed_num}#issuecomment-${comment_number}"
-            fi
-            ;;
-        Pre-release | Release)
-            command gh release view "$number" --web --repo "$repo_full_name"
-            ;;
-        *)
-            command gh repo view --web "$repo_full_name"
-            ;;
+    CheckSuite)
+        "$python_executable" -m webbrowser "https://github.com/${repo_full_name}/actions"
+        ;;
+    Commit)
+        command gh browse "$number" --repo "$repo_full_name"
+        ;;
+    Discussion)
+        "$python_executable" -m webbrowser "https://github.com/${repo_full_name}/discussions/${unhashed_num}"
+        ;;
+    Issue | PullRequest)
+        if [[ $comment_number == "$unhashed_num" || $comment_number == null ]]; then
+            command gh issue view "$number" --web --repo "$repo_full_name"
+        else
+            "$python_executable" -m webbrowser "https://github.com/${repo_full_name}/issues/${unhashed_num}#issuecomment-${comment_number}"
+        fi
+        ;;
+    Pre-release | Release)
+        command gh release view "$number" --web --repo "$repo_full_name"
+        ;;
+    *)
+        command gh repo view --web "$repo_full_name"
+        ;;
     esac
 }
 
@@ -441,23 +448,23 @@ view_notification() {
     IFS=' ' read -r _ _ _ _ repo_full_name _ date time _ type number _ <<<"$1"
     printf "[%s %s - %s]\n" "$date" "$time" "$type"
     case "$type" in
-        Commit)
-            gh_rest_api --cache=24h "repos/$repo_full_name/commits/$number" \
-                --jq '.files[].patch' | highlight_output
-            ;;
-        Issue)
-            # use the '--comments' flag only if 'all_comments' exists and is not null
-            command gh issue view "$number" --repo "$repo_full_name" ${all_comments:+"--comments"}
-            ;;
-        PullRequest)
-            command gh pr view "$number" --repo "$repo_full_name" ${all_comments:+"--comments"}
-            ;;
-        Pre-release | Release)
-            command gh release view "$number" --repo "$repo_full_name"
-            ;;
-        *)
-            printf "Seeing the preview of a %b%s%b is not supported.\n" "$WHITE_BOLD" "$type" "$NC"
-            ;;
+    Commit)
+        gh_rest_api --cache=24h "repos/$repo_full_name/commits/$number" \
+            --jq '.files[].patch' | highlight_output
+        ;;
+    Issue)
+        # use the '--comments' flag only if 'all_comments' exists and is not null
+        command gh issue view "$number" --repo "$repo_full_name" ${all_comments:+"--comments"}
+        ;;
+    PullRequest)
+        command gh pr view "$number" --repo "$repo_full_name" ${all_comments:+"--comments"}
+        ;;
+    Pre-release | Release)
+        command gh release view "$number" --repo "$repo_full_name"
+        ;;
+    *)
+        printf "Seeing the preview of a %b%s%b is not supported.\n" "$WHITE_BOLD" "$type" "$NC"
+        ;;
     esac
 }
 
@@ -477,20 +484,20 @@ view_in_pager() {
 
     # Move to the end of the file only for Issues or PRs that have comments.
     case "$type" in
-        Issue | PullRequest)
-            unhashed_num=$(command tr -d "#" <<<"$number")
-            [[ $type == "PullRequest" ]] && issue_or_pr="pulls"
+    Issue | PullRequest)
+        unhashed_num=$(command tr -d "#" <<<"$number")
+        [[ $type == "PullRequest" ]] && issue_or_pr="pulls"
 
-            if total_comments=$(gh_rest_api \
-                "repos/${repo_full_name}/${issue_or_pr}/${unhashed_num}" \
-                --jq '.comments' 2>/dev/null); then
-                if ((total_comments > 0)); then
-                    less_args+=(
-                        "+G" # start at the end of the file
-                    )
-                fi
+        if total_comments=$(gh_rest_api \
+            "repos/${repo_full_name}/${issue_or_pr}/${unhashed_num}" \
+            --jq '.comments' 2>/dev/null); then
+            if ((total_comments > 0)); then
+                less_args+=(
+                    "+G" # start at the end of the file
+                )
             fi
-            ;;
+        fi
+        ;;
     esac
 
     # Redirect 'less' output to '/dev/tty' to interact with the terminal when in command
@@ -513,7 +520,8 @@ mark_all_read() {
 mark_individual_read() {
     local thread_id thread_state
     declare -a array_threads=()
-    while IFS=' ' read -r _ thread_id thread_state _; do
+    while IFS=' ' read -r a thread_id thread_state b; do
+        echo "$a $b $thread_state"
         if [[ $thread_state == "UNREAD" ]]; then
             array_threads+=("$thread_id")
         fi
@@ -533,6 +541,34 @@ mark_individual_read() {
                 # Running commands in the background of a script can cause it to hang, especially if
                 # the command outputs to stdout: https://tldp.org/LDP/abs/html/x9644.html#WAITHANG
                 gh_rest_api --silent --method PATCH "notifications/threads/${j}" &>/dev/null &
+            done
+            wait
+            command sleep 0.3
+        done
+    fi
+}
+
+mark_individual_done() {
+    local thread_id
+    declare -a array_threads=()
+    while IFS=' ' read -r _ thread_id _ _; do
+        array_threads+=("$thread_id")
+    done <"$1"
+
+    if [[ ${#array_threads[@]} -eq 1 ]]; then
+        gh_rest_api --silent --method DELETE "notifications/threads/${array_threads[0]}" ||
+            die "Failed to mark notifications as done."
+    elif [[ ${#array_threads[@]} -gt 1 ]]; then
+        # If there is a large number of threads to be processed, the number of background jobs can
+        # put pressure on the PC. Additionally, too many requests in short succession can trigger a
+        # rate limit by GitHub. Therefore, we process the threads in batches of 30, with a short
+        # delay of 0.3 seconds between each batch. This approach worked well in my tests with 200
+        # notifications.
+        for ((i = 0; i < ${#array_threads[@]}; i += 30)); do
+            for j in "${array_threads[@]:i:30}"; do
+                # Running commands in the background of a script can cause it to hang, especially if
+                # the command outputs to stdout: https://tldp.org/LDP/abs/html/x9644.html#WAITHANG
+                gh_rest_api --silent --method DELETE "notifications/threads/${j}" &>/dev/null &
             done
             command sleep 0.3
         done
@@ -557,11 +593,13 @@ select_notif() {
             --bind "${GH_NOTIFY_RESIZE_PREVIEW_KEY}:change-preview-window(75%:nohidden|75%:down:nohidden:border-top|nohidden)" \
             --bind "change:first" \
             --bind "${GH_NOTIFY_MARK_ALL_READ_KEY}:select-all+execute-silent(if [[ -z {q} && \$FINAL_MSG =~ 'All caught up' ]]; then mark_all_read {}; else mark_individual_read {+f}; fi)+reload:print_notifs || true" \
+            --bind "${GH_NOTIFY_MARK_ALL_DONE_KEY}:select-all+execute-silent(if [[ -z {q} && \$FINAL_MSG =~ 'All caught up' ]]; then mark_individual_done {+f}; else mark_individual_done {+f}; fi)+reload:print_notifs || true" \
             --bind "${GH_NOTIFY_OPEN_BROWSER_KEY}:execute-silent:open_in_browser {}" \
             --bind "${GH_NOTIFY_VIEW_DIFF_KEY}:toggle-preview+change-preview:if command grep -q PullRequest <<<{10}; then command gh pr diff {11} --repo {5}  | highlight_output; else view_notification {}; fi" \
             --bind "${GH_NOTIFY_VIEW_PATCH_KEY}:toggle-preview+change-preview:if command grep -q PullRequest <<<{10}; then command gh pr diff {11} --patch --repo {5} | highlight_output; else view_notification {}; fi" \
             --bind "${GH_NOTIFY_RELOAD_KEY}:reload:print_notifs || true" \
             --bind "${GH_NOTIFY_MARK_READ_KEY}:execute-silent(mark_individual_read {+f})+reload:print_notifs || true" \
+            --bind "${GH_NOTIFY_MARK_DONE_KEY}:execute-silent(mark_individual_done {+f})+reload:print_notifs || true" \
             --bind "${GH_NOTIFY_TOGGLE_KEY}:toggle+down" \
             --bind "${GH_NOTIFY_VIEW_KEY}:execute:view_in_pager {}" \
             --bind "${GH_NOTIFY_TOGGLE_PREVIEW_KEY}:toggle-preview+change-preview:view_notification {}" \
@@ -594,24 +632,24 @@ select_notif() {
     IFS=' ' read -r _ thread_id thread_state _ repo_full_name _ _ _ _ type num _ <<<"$selected_line"
     [[ -z $type ]] && exit 0
     case "$expected_key" in
-        esc)
-            # quit with exit code 0; 'fzf' returns 130 by default
-            exit 0
-            ;;
-        "${GH_NOTIFY_COMMENT_KEY}")
-            if command grep -qE "Issue|PullRequest" <<<"$type"; then
-                command gh issue comment "$num" --repo "$repo_full_name"
-                # The function requires input in a file-like format
-                mark_individual_read <(echo "$selected_line")
-            else
-                printf "Writing comments is only supported for %bIssues%b and %bPullRequests%b.\n" \
-                    "$WHITE_BOLD" "$NC" "$WHITE_BOLD" "$NC"
-                exit 1
-            fi
-            ;;
-        *)
-            die "Unexpected key '$expected_key'"
-            ;;
+    esc)
+        # quit with exit code 0; 'fzf' returns 130 by default
+        exit 0
+        ;;
+    "${GH_NOTIFY_COMMENT_KEY}")
+        if command grep -qE "Issue|PullRequest" <<<"$type"; then
+            command gh issue comment "$num" --repo "$repo_full_name"
+            # The function requires input in a file-like format
+            mark_individual_read <(echo "$selected_line")
+        else
+            printf "Writing comments is only supported for %bIssues%b and %bPullRequests%b.\n" \
+                "$WHITE_BOLD" "$NC" "$WHITE_BOLD" "$NC"
+            exit 1
+        fi
+        ;;
+    *)
+        die "Unexpected key '$expected_key'"
+        ;;
     esac
 }
 
@@ -656,22 +694,22 @@ update_subscription() {
         #"SUBSCRIBED" - "The User is notified of all conversations."
         #"IGNORED" - "The User is never notified."
         case "$viewer_subscription" in
-            SUBSCRIBED)
-                updated_state="UNSUBSCRIBED"
-                update_text="Notifications disabled for this '$object_type'."
-                ;;
-            IGNORED | UNSUBSCRIBED)
-                updated_state="SUBSCRIBED"
-                update_text="Notifications enabled for this '$object_type'."
-                ;;
-            *)
-                # TODO: When a user makes a 'Custom' selection on what to watch in a repo via the
-                # Web UI. For instance, if a user chooses to only watch 'Releases', then
-                # 'viewer_subscription' becomes null for any URL associated with the entire repo and
-                # this error message is displayed. Currently, there is no workaround for this. Last
-                # checked: March '24.
-                die "The queried value for the current status is unknown: '$viewer_subscription'."
-                ;;
+        SUBSCRIBED)
+            updated_state="UNSUBSCRIBED"
+            update_text="Notifications disabled for this '$object_type'."
+            ;;
+        IGNORED | UNSUBSCRIBED)
+            updated_state="SUBSCRIBED"
+            update_text="Notifications enabled for this '$object_type'."
+            ;;
+        *)
+            # TODO: When a user makes a 'Custom' selection on what to watch in a repo via the
+            # Web UI. For instance, if a user chooses to only watch 'Releases', then
+            # 'viewer_subscription' becomes null for any URL associated with the entire repo and
+            # this error message is displayed. Currently, there is no workaround for this. Last
+            # checked: March '24.
+            die "The queried value for the current status is unknown: '$viewer_subscription'."
+            ;;
         esac
 
         # NOTE: For example, if you "UNSUBSCRIBE" from an Issue but you are still
@@ -702,31 +740,33 @@ update_subscription() {
 
 main() {
     local python_version notifs
+
     # CLI Options
-    while getopts 'e:f:n:u:pawsrh' flag; do
+    while getopts 'e:f:n:u:pawsrdh' flag; do
         case "${flag}" in
-            e)
-                FINAL_MSG="No results found."
-                exclusion_string="${OPTARG}"
-                ;;
-            f)
-                FINAL_MSG="No results found."
-                filter_string="${OPTARG}"
-                ;;
-            n) num_notifications="${OPTARG}" ;;
-            p) only_participating_flag=true ;;
-            u) update_subscription_url="${OPTARG}" ;;
-            a) include_all_flag=true ;;
-            w) preview_window_visibility='nohidden' ;;
-            s) print_static_flag=true ;;
-            r) mark_read_flag=true ;;
-            h)
-                print_help_text
-                exit 0
-                ;;
-            *)
-                die "see 'gh notify -h' for help"
-                ;;
+        e)
+            FINAL_MSG="No results found."
+            exclusion_string="${OPTARG}"
+            ;;
+        f)
+            FINAL_MSG="No results found."
+            filter_string="${OPTARG}"
+            ;;
+        n) num_notifications="${OPTARG}" ;;
+        p) only_participating_flag=true ;;
+        u) update_subscription_url="${OPTARG}" ;;
+        a) include_all_flag=true ;;
+        w) preview_window_visibility='nohidden' ;;
+        s) print_static_flag=true ;;
+        r) mark_read_flag=true ;;
+        d) mark_done_flag=true ;;
+        h)
+            print_help_text
+            exit 0
+            ;;
+        *)
+            die "see 'gh notify -h' for help"
+            ;;
         esac
     done
 
@@ -738,12 +778,26 @@ main() {
         update_subscription
     fi
 
+    notifs="$(print_notifs)"
+
     if $mark_read_flag; then
         if [[ $FINAL_MSG =~ 'All caught up' ]]; then
             mark_all_read "" || die "Failed to mark notifications as read."
             echo "All notifications have been marked as read."
         else
-            die "Can't mark all notifications as read when either the '-e' or '-f' flag was used, as it would also mark notifications as read that are filtered out."
+            mark_individual_read <(echo "$notifs") || die "Failed to mark notifications as read."
+            # die "Can't mark all notifications as read when either the '-e' or '-f' flag was used, as it would also mark notifications as read that are filtered out."
+        fi
+        exit 0
+    fi
+
+    if $mark_done_flag; then
+        if [[ $FINAL_MSG =~ 'All caught up' ]]; then
+            mark_individual_done <(echo "$notifs") || die "Failed to mark notifications as done."
+            echo "All notifications have been marked as done."
+        else
+            mark_individual_done <(echo "$notifs") || die "Failed to mark notifications as done."
+            # die "Can't mark all notifications as read when either the '-e' or '-f' flag was used, as it would also mark notifications as read that are filtered out."
         fi
         exit 0
     fi
@@ -765,7 +819,6 @@ main() {
         check_version fzf "$MIN_FZF_VERSION"
     fi
 
-    notifs="$(print_notifs)"
     if [[ -z $notifs ]]; then
         echo "$FINAL_MSG"
         exit 0
